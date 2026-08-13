@@ -2,13 +2,9 @@ import streamlit as st
 import requests
 import pandas as pd
 
-from datetime import (
-    date,
-    timedelta,
-    datetime
-)
-
+from datetime import date, timedelta, datetime
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 
 # ============================================================
@@ -24,20 +20,33 @@ st.set_page_config(
 
 
 # ============================================================
-# MARKET TIMING
+# INDIA TIMEZONE
 # ============================================================
 
-PRE_MARKET_OPEN = "09:00 AM"
-PRE_MARKET_CLOSE = "09:08 AM"
+IST = ZoneInfo("Asia/Kolkata")
+
+
+def get_ist_time():
+    return datetime.now(IST)
 
 
 # ============================================================
-# LAST UPDATED
+# UPSTOX INSTRUMENT URL
+# ============================================================
+
+UPSTOX_INSTRUMENT_URL = (
+    "https://assets.upstox.com/"
+    "market-quote/instruments/exchange/NSE.json.gz"
+)
+
+
+# ============================================================
+# LAST UPDATED TIME
 # ============================================================
 
 if "last_updated" not in st.session_state:
 
-    st.session_state.last_updated = datetime.now()
+    st.session_state.last_updated = get_ist_time()
 
 
 # ============================================================
@@ -48,58 +57,101 @@ st.markdown(
     """
     <style>
 
-    /* Full screen */
+    /* ======================================================
+       FULL WIDTH
+       ====================================================== */
 
     .block-container {
         padding-top: 0.8rem !important;
-        padding-left: 1rem !important;
-        padding-right: 1rem !important;
+        padding-bottom: 0.5rem !important;
+        padding-left: 1.0rem !important;
+        padding-right: 1.0rem !important;
         max-width: 100% !important;
     }
 
 
-    /* Hide Streamlit header */
+    /* ======================================================
+       HIDE STREAMLIT HEADER
+       ====================================================== */
 
     header[data-testid="stHeader"] {
         display: none;
     }
 
 
-    /* Main title */
+    /* ======================================================
+       MAIN TITLE
+       ====================================================== */
 
     .main-title {
         font-size: 30px;
-        font-weight: 700;
+        font-weight: 750;
         line-height: 1.1;
         margin-bottom: 12px;
     }
 
 
-    /* Section title */
+    /* ======================================================
+       SECTION TITLE
+       ====================================================== */
 
     .section-title {
-        font-size: 22px;
+        font-size: 21px;
         font-weight: 700;
-        margin-top: 15px;
-        margin-bottom: 8px;
+        margin-top: 14px;
+        margin-bottom: 7px;
     }
 
 
-    /* Metric cards */
+    /* ======================================================
+       METRIC CARDS
+       ====================================================== */
 
     div[data-testid="stMetric"] {
 
-        border: 1px solid #dddddd;
-
-        padding: 10px;
+        border: 1px solid #e0e0e0;
 
         border-radius: 10px;
 
-        min-height: 90px;
+        padding: 10px 14px;
+
+        min-height: 82px;
+
+        background: white;
     }
 
 
-    /* Dataframe full width */
+    div[data-testid="stMetricLabel"] {
+
+        font-size: 13px;
+    }
+
+
+    div[data-testid="stMetricValue"] {
+
+        font-size: 27px;
+    }
+
+
+    /* ======================================================
+       BUTTON
+       ====================================================== */
+
+    .stButton button {
+
+        height: 40px;
+
+        border-radius: 8px;
+
+        font-weight: 600;
+
+        width: 100%;
+    }
+
+
+    /* ======================================================
+       DATAFRAME
+       ====================================================== */
 
     div[data-testid="stDataFrame"] {
 
@@ -107,38 +159,34 @@ st.markdown(
     }
 
 
-    /* Reduce gaps */
+    /* ======================================================
+       REMOVE EXCESS GAP
+       ====================================================== */
 
     div[data-testid="stVerticalBlock"] {
 
-        gap: 0.5rem;
+        gap: 0.35rem;
     }
 
 
-    /* Button */
+    /* ======================================================
+       FOOTER
+       ====================================================== */
 
-    .stButton button {
+    .footer-text {
 
-        height: 42px;
+        text-align: center;
 
-        font-weight: 600;
+        font-size: 13px;
 
-        border-radius: 8px;
+        color: #555;
+
+        margin-top: 8px;
     }
 
     </style>
     """,
     unsafe_allow_html=True
-)
-
-
-# ============================================================
-# UPSTOX INSTRUMENT URL
-# ============================================================
-
-UPSTOX_INSTRUMENT_URL = (
-    "https://assets.upstox.com/"
-    "market-quote/instruments/exchange/NSE.json.gz"
 )
 
 
@@ -168,7 +216,7 @@ def normalize_expiry(series):
 
 
 # ============================================================
-# LOAD INSTRUMENTS
+# LOAD UPSTOX INSTRUMENTS
 # ============================================================
 
 @st.cache_data(
@@ -182,7 +230,6 @@ def load_instruments():
         compression="gzip"
     )
 
-
     instruments["expiry_date"] = (
         normalize_expiry(
             instruments["expiry"]
@@ -190,9 +237,9 @@ def load_instruments():
     )
 
 
-    # --------------------------------------------------------
-    # EQUITY
-    # --------------------------------------------------------
+    # ========================================================
+    # NSE EQUITY
+    # ========================================================
 
     equities = instruments[
         (instruments["segment"] == "NSE_EQ")
@@ -204,9 +251,9 @@ def load_instruments():
     ].copy()
 
 
-    # --------------------------------------------------------
-    # OPTIONS
-    # --------------------------------------------------------
+    # ========================================================
+    # NSE OPTIONS
+    # ========================================================
 
     options = instruments[
         (instruments["segment"] == "NSE_FO")
@@ -259,7 +306,7 @@ def load_instruments():
 
 
 # ============================================================
-# NEAREST STRIKE
+# FIND NEAREST STRIKE
 # ============================================================
 
 def nearest_strike(
@@ -268,6 +315,16 @@ def nearest_strike(
     option_type,
     price
 ):
+
+    if price is None:
+
+        return None
+
+
+    if pd.isna(price):
+
+        return None
+
 
     chain = options[
         (options["underlying_symbol"] == symbol)
@@ -284,20 +341,17 @@ def nearest_strike(
         return None
 
 
-    if pd.isna(price):
-
-        return None
-
-
-    chain["diff"] = (
+    chain["difference"] = (
         chain["strike_price"]
-        - price
+        - float(price)
     ).abs()
 
 
     nearest = (
         chain
-        .sort_values("diff")
+        .sort_values(
+            "difference"
+        )
         .iloc[0]
     )
 
@@ -308,7 +362,7 @@ def nearest_strike(
 
 
 # ============================================================
-# OPTION INSTRUMENT KEY
+# FIND OPTION INSTRUMENT KEY
 # ============================================================
 
 def option_instrument_key(
@@ -360,7 +414,10 @@ def nse_session():
     headers = {
 
         "User-Agent":
-            "Mozilla/5.0",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/151.0.0.0 Safari/537.36",
 
         "Accept":
             "application/json,text/plain,*/*",
@@ -370,8 +427,6 @@ def nse_session():
 
         "Referer":
             "https://www.nseindia.com/"
-            "market-data/"
-            "pre-open-market-cm-and-emerge-market"
     }
 
 
@@ -388,14 +443,11 @@ def nse_session():
         pass
 
 
-    return (
-        session,
-        headers
-    )
+    return session, headers
 
 
 # ============================================================
-# NSE PRE-MARKET DATA
+# NSE PRE-OPEN DATA
 # ============================================================
 
 def fetch_nse_preopen_fo():
@@ -431,7 +483,7 @@ def fetch_nse_preopen_fo():
     if response.status_code != 200:
 
         st.error(
-            "NSE Error: HTTP "
+            f"NSE Error: HTTP "
             f"{response.status_code}"
         )
 
@@ -468,7 +520,9 @@ def fetch_nse_preopen_fo():
         rows.append({
 
             "Symbol":
-                metadata.get("symbol"),
+                metadata.get(
+                    "symbol"
+                ),
 
             "Prev Close":
                 metadata.get(
@@ -493,17 +547,14 @@ def fetch_nse_preopen_fo():
             "Final":
                 metadata.get(
                     "finalPrice"
-                ),
-
-            "Final Quantity":
-                metadata.get(
-                    "finalQuantity"
                 )
 
         })
 
 
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame(
+        rows
+    )
 
 
     if df.empty:
@@ -511,22 +562,21 @@ def fetch_nse_preopen_fo():
         return df
 
 
-    numeric_cols = [
+    numeric_columns = [
 
         "Prev Close",
         "IEP",
         "Change",
         "% Change",
-        "Final",
-        "Final Quantity"
+        "Final"
 
     ]
 
 
-    for col in numeric_cols:
+    for column in numeric_columns:
 
-        df[col] = pd.to_numeric(
-            df[col],
+        df[column] = pd.to_numeric(
+            df[column],
             errors="coerce"
         )
 
@@ -655,49 +705,57 @@ def fetch_upstox_history(
 
 
 # ============================================================
-# PREVIOUS LEVELS
+# PREVIOUS DAY / WEEK / MONTH LEVELS
 # ============================================================
 
 def get_previous_levels(
     equity_key
 ):
 
-    hist = fetch_upstox_history(
+    history = fetch_upstox_history(
         equity_key
     )
 
 
-    if hist.empty:
+    if history.empty:
 
         return None
 
 
-    prev_day = hist.iloc[-1]
+    previous_day = (
+        history.iloc[-1]
+    )
 
-    prev_week = hist.tail(5)
 
-    prev_month = hist.tail(20)
+    previous_week = (
+        history.tail(5)
+    )
+
+
+    previous_month = (
+        history.tail(20)
+    )
 
 
     return {
 
         "Pre Day High":
-            prev_day["high"],
+            previous_day["high"],
 
         "Pre Week High":
-            prev_week["high"].max(),
+            previous_week["high"].max(),
 
         "Pre Month High":
-            prev_month["high"].max(),
+            previous_month["high"].max(),
 
         "Pre Day Low":
-            prev_day["low"],
+            previous_day["low"],
 
         "Pre Week Low":
-            prev_week["low"].min(),
+            previous_week["low"].min(),
 
         "Pre Month Low":
-            prev_month["low"].min()
+            previous_month["low"].min()
 
     }
 
@@ -706,7 +764,7 @@ def get_previous_levels(
 # PREVIOUS OPTION CLOSE
 # ============================================================
 
-def get_prev_close(
+def get_previous_option_close(
     instrument_key
 ):
 
@@ -715,24 +773,24 @@ def get_prev_close(
         return None
 
 
-    hist = fetch_upstox_history(
+    history = fetch_upstox_history(
         instrument_key
     )
 
 
-    if hist.empty:
+    if history.empty:
 
         return None
 
 
-    return hist.iloc[-1]["close"]
+    return history.iloc[-1]["close"]
 
 
 # ============================================================
-# TOP 5 GAINERS / LOSERS
+# CREATE TOP 5
 # ============================================================
 
-def get_top5_premarket_with_strikes(
+def get_top5_premarket(
     options
 ):
 
@@ -758,8 +816,18 @@ def get_top5_premarket_with_strikes(
 
         pre_open_price = row["IEP"]
 
+        previous_close = row[
+            "Prev Close"
+        ]
 
-        ce_strike = nearest_strike(
+
+        # ====================================================
+        # OPEN STRIKE
+        #
+        # Based on PRE-OPEN price
+        # ====================================================
+
+        open_strike_ce = nearest_strike(
             options,
             symbol,
             "CE",
@@ -767,11 +835,32 @@ def get_top5_premarket_with_strikes(
         )
 
 
-        pe_strike = nearest_strike(
-            options,
-            symbol,
-            "PE",
-            pre_open_price
+        # CE and PE have same strike
+        # so use one Open Strike
+
+        open_strike = (
+            open_strike_ce
+        )
+
+
+        # ====================================================
+        # PRE CLOSE STRIKE
+        #
+        # Based on PREVIOUS CLOSE
+        # ====================================================
+
+        pre_close_strike_ce = (
+            nearest_strike(
+                options,
+                symbol,
+                "CE",
+                previous_close
+            )
+        )
+
+
+        pre_close_strike = (
+            pre_close_strike_ce
         )
 
 
@@ -784,21 +873,23 @@ def get_top5_premarket_with_strikes(
                 pre_open_price,
 
             "Prev Close":
-                row["Prev Close"],
+                previous_close,
 
             "% Change":
                 row["% Change"],
 
-            "CE Strike":
-                ce_strike,
+            "Open Strike":
+                open_strike,
 
-            "PE Strike":
-                pe_strike
+            "Pre Close Strike":
+                pre_close_strike
 
         })
 
 
-    final = pd.DataFrame(rows)
+    final = pd.DataFrame(
+        rows
+    )
 
 
     if final.empty:
@@ -809,19 +900,26 @@ def get_top5_premarket_with_strikes(
         )
 
 
-    for col in [
+    numeric_columns = [
 
         "Pre Open",
         "Prev Close",
         "% Change"
 
-    ]:
+    ]
 
-        final[col] = pd.to_numeric(
-            final[col],
+
+    for column in numeric_columns:
+
+        final[column] = pd.to_numeric(
+            final[column],
             errors="coerce"
-        ).round(2)
+        )
 
+
+    # ========================================================
+    # TOP 5 GAINERS
+    # ========================================================
 
     gainers = (
         final
@@ -833,6 +931,10 @@ def get_top5_premarket_with_strikes(
         .reset_index(drop=True)
     )
 
+
+    # ========================================================
+    # TOP 5 LOSERS
+    # ========================================================
 
     losers = (
         final
@@ -852,10 +954,10 @@ def get_top5_premarket_with_strikes(
 
 
 # ============================================================
-# ADD LEVELS + BEP
+# ADD LEVELS AND OPTION DATA
 # ============================================================
 
-def add_levels_and_bep(
+def add_levels_and_options(
     df,
     equities,
     options,
@@ -871,23 +973,35 @@ def add_levels_and_bep(
 
         pre_open = row["Pre Open"]
 
+        previous_close = (
+            row["Prev Close"]
+        )
 
-        match = equities[
+
+        # ====================================================
+        # EQUITY INSTRUMENT
+        # ====================================================
+
+        equity_match = equities[
             equities["trading_symbol"]
             == symbol
         ]
 
 
-        if match.empty:
+        if equity_match.empty:
 
             continue
 
 
         equity_key = (
-            match
+            equity_match
             .iloc[0]["instrument_key"]
         )
 
+
+        # ====================================================
+        # PREVIOUS LEVELS
+        # ====================================================
 
         levels = get_previous_levels(
             equity_key
@@ -899,66 +1013,98 @@ def add_levels_and_bep(
             continue
 
 
-        ce_key = (
-            option_instrument_key(
-                options,
-                symbol,
-                "CE",
-                row["CE Strike"]
-            )
+        # ====================================================
+        # IMPORTANT:
+        #
+        # OPEN STRIKE
+        # = based on PRE OPEN
+        #
+        # PRE CLOSE STRIKE
+        # = based on PREVIOUS CLOSE
+        # ====================================================
+
+        open_strike = (
+            row["Open Strike"]
         )
 
 
-        pe_key = (
-            option_instrument_key(
-                options,
-                symbol,
-                "PE",
-                row["PE Strike"]
-            )
+        pre_close_strike = (
+            row["Pre Close Strike"]
         )
 
 
-        pre_close_ce = (
-            get_prev_close(
+        # ====================================================
+        # OPTION KEYS
+        #
+        # IMPORTANT:
+        # PREVIOUS OPTION CLOSE
+        # uses PRE CLOSE STRIKE
+        # ====================================================
+
+        ce_key = option_instrument_key(
+            options,
+            symbol,
+            "CE",
+            pre_close_strike
+        )
+
+
+        pe_key = option_instrument_key(
+            options,
+            symbol,
+            "PE",
+            pre_close_strike
+        )
+
+
+        # ====================================================
+        # PREVIOUS CE CLOSE
+        # ====================================================
+
+        previous_ce_close = (
+            get_previous_option_close(
                 ce_key
             )
         )
 
 
-        pre_close_pe = (
-            get_prev_close(
+        # ====================================================
+        # PREVIOUS PE CLOSE
+        # ====================================================
+
+        previous_pe_close = (
+            get_previous_option_close(
                 pe_key
             )
         )
 
 
-        # ----------------------------------------------------
+        # ====================================================
         # BEP
-        # ----------------------------------------------------
+        # ====================================================
 
         bep = None
 
 
         if (
-            pre_close_ce is not None
+            previous_ce_close is not None
             and
-            pre_close_pe is not None
+            previous_pe_close is not None
         ):
 
             bep = (
-                pre_close_ce
+                previous_ce_close
                 +
-                pre_close_pe
+                previous_pe_close
             ) / 2
 
 
         new_row = row.to_dict()
 
 
-        # ----------------------------------------------------
-        # GAINERS
-        # ----------------------------------------------------
+        # ====================================================
+        # COMMON LEVELS
+        # ====================================================
 
         if side == "gainer":
 
@@ -982,6 +1128,10 @@ def add_levels_and_bep(
                 "Pre Month High"
             ]
 
+
+            # ------------------------------------------------
+            # HIGH STATUS
+            # ------------------------------------------------
 
             new_row[
                 "Day High Status"
@@ -1022,11 +1172,7 @@ def add_levels_and_bep(
             )
 
 
-        # ----------------------------------------------------
-        # LOSERS
-        # ----------------------------------------------------
-
-        if side == "loser":
+        else:
 
             new_row[
                 "Pre Day Low"
@@ -1048,6 +1194,10 @@ def add_levels_and_bep(
                 "Pre Month Low"
             ]
 
+
+            # ------------------------------------------------
+            # LOW STATUS
+            # ------------------------------------------------
 
             new_row[
                 "Day Low Status"
@@ -1088,18 +1238,18 @@ def add_levels_and_bep(
             )
 
 
-        # ----------------------------------------------------
-        # OPTION CLOSES
-        # ----------------------------------------------------
+        # ====================================================
+        # OPTION DATA
+        # ====================================================
 
         new_row[
             "Pre Close CE"
-        ] = pre_close_ce
+        ] = previous_ce_close
 
 
         new_row[
             "Pre Close PE"
-        ] = pre_close_pe
+        ] = previous_pe_close
 
 
         new_row[
@@ -1122,7 +1272,11 @@ def add_levels_and_bep(
         return result
 
 
-    number_cols = [
+    # ========================================================
+    # ROUND NUMBERS
+    # ========================================================
+
+    numeric_columns = [
 
         "Pre Open",
         "Prev Close",
@@ -1144,12 +1298,12 @@ def add_levels_and_bep(
     ]
 
 
-    for col in number_cols:
+    for column in numeric_columns:
 
-        if col in result.columns:
+        if column in result.columns:
 
-            result[col] = pd.to_numeric(
-                result[col],
+            result[column] = pd.to_numeric(
+                result[column],
                 errors="coerce"
             ).round(2)
 
@@ -1158,12 +1312,11 @@ def add_levels_and_bep(
 
 
 # ============================================================
-# FORMAT TABLE
+# FORMAT GAINER TABLE
 # ============================================================
 
-def format_table(
-    df,
-    side
+def format_gainer_table(
+    df
 ):
 
     if df.empty:
@@ -1171,96 +1324,125 @@ def format_table(
         return df
 
 
-    display_df = df.copy()
+    columns = [
 
+        "Symbol",
 
-    if side == "gainer":
+        "Pre Open",
 
-        columns = [
+        "Prev Close",
 
-            "Symbol",
+        "% Change",
 
-            "Pre Open",
+        "Open Strike",
 
-            "Prev Close",
+        "Pre Close Strike",
 
-            "% Change",
+        "Pre Day High",
 
-            "CE Strike",
+        "Pre Week High",
 
-            "PE Strike",
+        "Pre Month High",
 
-            "Pre Day High",
+        "Day High Status",
 
-            "Pre Week High",
+        "Week High Status",
 
-            "Pre Month High",
+        "Month High Status",
 
-            "Day High Status",
+        "Pre Close CE",
 
-            "Week High Status",
+        "Pre Close PE",
 
-            "Month High Status",
+        "BEP"
 
-            "Pre Close CE",
-
-            "Pre Close PE",
-
-            "BEP"
-
-        ]
-
-    else:
-
-        columns = [
-
-            "Symbol",
-
-            "Pre Open",
-
-            "Prev Close",
-
-            "% Change",
-
-            "CE Strike",
-
-            "PE Strike",
-
-            "Pre Day Low",
-
-            "Pre Week Low",
-
-            "Pre Month Low",
-
-            "Day Low Status",
-
-            "Week Low Status",
-
-            "Month Low Status",
-
-            "Pre Close CE",
-
-            "Pre Close PE",
-
-            "BEP"
-
-        ]
+    ]
 
 
     columns = [
 
-        col
+        column
 
-        for col in columns
+        for column in columns
 
-        if col in display_df.columns
+        if column in df.columns
 
     ]
 
 
-    return display_df[
+    result = df[
         columns
+    ].copy()
+
+
+    return result
+
+
+# ============================================================
+# FORMAT LOSER TABLE
+# ============================================================
+
+def format_loser_table(
+    df
+):
+
+    if df.empty:
+
+        return df
+
+
+    columns = [
+
+        "Symbol",
+
+        "Pre Open",
+
+        "Prev Close",
+
+        "% Change",
+
+        "Open Strike",
+
+        "Pre Close Strike",
+
+        "Pre Day Low",
+
+        "Pre Week Low",
+
+        "Pre Month Low",
+
+        "Day Low Status",
+
+        "Week Low Status",
+
+        "Month Low Status",
+
+        "Pre Close CE",
+
+        "Pre Close PE",
+
+        "BEP"
+
     ]
+
+
+    columns = [
+
+        column
+
+        for column in columns
+
+        if column in df.columns
+
+    ]
+
+
+    result = df[
+        columns
+    ].copy()
+
+
+    return result
 
 
 # ============================================================
@@ -1278,45 +1460,39 @@ st.markdown(
 
 
 # ============================================================
-# MANUAL REFRESH BUTTON
+# TOP RIGHT MANUAL REFRESH
 # ============================================================
 
-refresh_col1, refresh_col2 = (
+left_space, refresh_space = (
     st.columns([8, 2])
 )
 
 
-with refresh_col2:
+with refresh_space:
 
     if st.button(
         "🔄 Manual Refresh",
         use_container_width=True
     ):
 
-        # Store actual refresh time
+        # ====================================================
+        # IMPORTANT:
+        # Store refresh time in IST
+        # ====================================================
 
         st.session_state.last_updated = (
-            datetime.now()
+            get_ist_time()
         )
 
 
-        # Clear cached NSE / Upstox data
+        # Clear cached market data
 
         st.cache_data.clear()
 
 
-        # Reload page
+        # Refresh page
 
         st.rerun()
-
-
-# ============================================================
-# LAST UPDATED TIME
-# ============================================================
-
-last_updated = (
-    st.session_state.last_updated
-)
 
 
 # ============================================================
@@ -1324,7 +1500,7 @@ last_updated = (
 # ============================================================
 
 with st.spinner(
-    "Loading NSE and Upstox data..."
+    "Loading NSE pre-market data..."
 ):
 
     try:
@@ -1332,11 +1508,11 @@ with st.spinner(
         (
             equities,
             options,
-            opt_expiry
+            option_expiry
         ) = load_instruments()
 
 
-        if opt_expiry is None:
+        if option_expiry is None:
 
             st.error(
                 "No future option expiry found."
@@ -1345,32 +1521,38 @@ with st.spinner(
             st.stop()
 
 
+        # ====================================================
+        # TOP 5
+        # ====================================================
+
         (
             top5_gainers,
             top5_losers
-        ) = (
-            get_top5_premarket_with_strikes(
-                options
-            )
+        ) = get_top5_premarket(
+            options
         )
 
 
+        # ====================================================
+        # ADD DATA
+        # ====================================================
+
         gainers_final = (
-            add_levels_and_bep(
+            add_levels_and_options(
                 top5_gainers,
                 equities,
                 options,
-                side="gainer"
+                "gainer"
             )
         )
 
 
         losers_final = (
-            add_levels_and_bep(
+            add_levels_and_options(
                 top5_losers,
                 equities,
                 options,
-                side="loser"
+                "loser"
             )
         )
 
@@ -1388,10 +1570,14 @@ with st.spinner(
 # SUMMARY CARDS
 # ============================================================
 
-c1, c2, c3, c4, c5 = (
-    st.columns(5)
+c1, c2, c3, c4 = (
+    st.columns(4)
 )
 
+
+# ============================================================
+# GAINERS
+# ============================================================
 
 with c1:
 
@@ -1401,6 +1587,10 @@ with c1:
     )
 
 
+# ============================================================
+# LOSERS
+# ============================================================
+
 with c2:
 
     st.metric(
@@ -1409,32 +1599,27 @@ with c2:
     )
 
 
+# ============================================================
+# EXPIRY
+# ============================================================
+
 with c3:
 
     st.metric(
         "OPTION EXPIRY",
-        str(opt_expiry)
+        str(option_expiry)
     )
 
+
+# ============================================================
+# LAST UPDATED
+# ============================================================
 
 with c4:
 
-    # FIXED MARKET TIME
-    # This is NOT server/current time.
-
-    st.metric(
-        "PRE-MARKET CLOSE",
-        PRE_MARKET_CLOSE
-    )
-
-
-with c5:
-
-    # ACTUAL MANUAL REFRESH TIME
-
     st.metric(
         "LAST UPDATED",
-        last_updated.strftime(
+        st.session_state.last_updated.strftime(
             "%I:%M:%S %p"
         )
     )
@@ -1463,18 +1648,95 @@ if gainers_final.empty:
 else:
 
     gainers_display = (
-        format_table(
-            gainers_final,
-            "gainer"
+        format_gainer_table(
+            gainers_final
         )
     )
 
 
     st.dataframe(
         gainers_display,
+
         use_container_width=True,
+
         hide_index=True,
-        height=300
+
+        height=285,
+
+        column_config={
+
+            "Symbol":
+                st.column_config.TextColumn(
+                    "Symbol"
+                ),
+
+            "Pre Open":
+                st.column_config.NumberColumn(
+                    "Pre Open",
+                    format="%.2f"
+                ),
+
+            "Prev Close":
+                st.column_config.NumberColumn(
+                    "Prev Close",
+                    format="%.2f"
+                ),
+
+            "% Change":
+                st.column_config.NumberColumn(
+                    "% Change",
+                    format="%.2f"
+                ),
+
+            "Open Strike":
+                st.column_config.NumberColumn(
+                    "Open Strike",
+                    format="%.0f"
+                ),
+
+            "Pre Close Strike":
+                st.column_config.NumberColumn(
+                    "Pre Close Strike",
+                    format="%.0f"
+                ),
+
+            "Pre Day High":
+                st.column_config.NumberColumn(
+                    "Pre Day High",
+                    format="%.2f"
+                ),
+
+            "Pre Week High":
+                st.column_config.NumberColumn(
+                    "Pre Week High",
+                    format="%.2f"
+                ),
+
+            "Pre Month High":
+                st.column_config.NumberColumn(
+                    "Pre Month High",
+                    format="%.2f"
+                ),
+
+            "Pre Close CE":
+                st.column_config.NumberColumn(
+                    "Pre Close CE",
+                    format="%.2f"
+                ),
+
+            "Pre Close PE":
+                st.column_config.NumberColumn(
+                    "Pre Close PE",
+                    format="%.2f"
+                ),
+
+            "BEP":
+                st.column_config.NumberColumn(
+                    "BEP",
+                    format="%.2f"
+                )
+
+        }
     )
 
 
@@ -1501,96 +1763,124 @@ if losers_final.empty:
 else:
 
     losers_display = (
-        format_table(
-            losers_final,
-            "loser"
+        format_loser_table(
+            losers_final
         )
     )
 
 
     st.dataframe(
         losers_display,
+
         use_container_width=True,
+
         hide_index=True,
-        height=300
+
+        height=285,
+
+        column_config={
+
+            "Symbol":
+                st.column_config.TextColumn(
+                    "Symbol"
+                ),
+
+            "Pre Open":
+                st.column_config.NumberColumn(
+                    "Pre Open",
+                    format="%.2f"
+                ),
+
+            "Prev Close":
+                st.column_config.NumberColumn(
+                    "Prev Close",
+                    format="%.2f"
+                ),
+
+            "% Change":
+                st.column_config.NumberColumn(
+                    "% Change",
+                    format="%.2f"
+                ),
+
+            "Open Strike":
+                st.column_config.NumberColumn(
+                    "Open Strike",
+                    format="%.0f"
+                ),
+
+            "Pre Close Strike":
+                st.column_config.NumberColumn(
+                    "Pre Close Strike",
+                    format="%.0f"
+                ),
+
+            "Pre Day Low":
+                st.column_config.NumberColumn(
+                    "Pre Day Low",
+                    format="%.2f"
+                ),
+
+            "Pre Week Low":
+                st.column_config.NumberColumn(
+                    "Pre Week Low",
+                    format="%.2f"
+                ),
+
+            "Pre Month Low":
+                st.column_config.NumberColumn(
+                    "Pre Month Low",
+                    format="%.2f"
+                ),
+
+            "Pre Close CE":
+                st.column_config.NumberColumn(
+                    "Pre Close CE",
+                    format="%.2f"
+                ),
+
+            "Pre Close PE":
+                st.column_config.NumberColumn(
+                    "Pre Close PE",
+                    format="%.2f"
+                ),
+
+            "BEP":
+                st.column_config.NumberColumn(
+                    "BEP",
+                    format="%.2f"
+                )
+
+        }
     )
-
-
-# ============================================================
-# DOWNLOAD
-# ============================================================
-
-st.markdown(
-    """
-    <div class="section-title">
-        📥 EXPORT
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
-
-d1, d2 = st.columns(2)
-
-
-with d1:
-
-    if not gainers_final.empty:
-
-        st.download_button(
-
-            "Download Gainers CSV",
-
-            gainers_final.to_csv(
-                index=False
-            ),
-
-            file_name=(
-                "nse_top5_gainers.csv"
-            ),
-
-            mime="text/csv",
-
-            use_container_width=True
-        )
-
-
-with d2:
-
-    if not losers_final.empty:
-
-        st.download_button(
-
-            "Download Losers CSV",
-
-            losers_final.to_csv(
-                index=False
-            ),
-
-            file_name=(
-                "nse_top5_losers.csv"
-            ),
-
-            mime="text/csv",
-
-            use_container_width=True
-        )
 
 
 # ============================================================
 # FOOTER
 # ============================================================
 
-st.markdown("---")
+current_updated = (
+    st.session_state.last_updated
+)
 
-st.caption(
-    "NSE Pre-Market Session: "
-    f"{PRE_MARKET_OPEN} – "
-    f"{PRE_MARKET_CLOSE}"
-    "  |  "
-    "Pre-Market Close: "
-    f"{PRE_MARKET_CLOSE}"
-    "  |  "
-    "Last manual refresh: "
-    f"{last_updated.strftime('%I:%M:%S %p')}"
+
+st.markdown(
+    f"""
+    <div class="footer-text">
+
+        NSE Pre-Market Data
+        &nbsp;&nbsp; | &nbsp;&nbsp;
+
+        Last Updated:
+        <b>
+        {current_updated.strftime("%I:%M:%S %p")}
+        </b>
+        &nbsp;&nbsp; | &nbsp;&nbsp;
+
+        Time Zone:
+        <b>IST</b>
+
+    </div>
+    """,
+    unsafe_allow_html=True
 )
