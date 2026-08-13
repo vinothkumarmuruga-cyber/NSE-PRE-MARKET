@@ -1,99 +1,141 @@
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import date, timedelta
+
+from datetime import (
+    date,
+    timedelta,
+    datetime
+)
+
 from urllib.parse import quote
 
 
 # ============================================================
 # PAGE CONFIG
 # ============================================================
+
 st.set_page_config(
     page_title="NSE Pre-Market Dashboard",
     page_icon="📊",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="collapsed"
 )
 
 
 # ============================================================
-# NSE PRE-MARKET TIMING
+# MARKET TIMING
 # ============================================================
+
 PRE_MARKET_OPEN = "09:00 AM"
 PRE_MARKET_CLOSE = "09:08 AM"
 
 
 # ============================================================
-# CUSTOM CSS
+# LAST UPDATED
 # ============================================================
+
+if "last_updated" not in st.session_state:
+
+    st.session_state.last_updated = datetime.now()
+
+
+# ============================================================
+# CSS
+# ============================================================
+
 st.markdown(
     """
     <style>
 
-    /* Remove Streamlit top padding */
+    /* Full screen */
+
     .block-container {
-        padding-top: 1rem !important;
-        padding-left: 1.2rem !important;
-        padding-right: 1.2rem !important;
+        padding-top: 0.8rem !important;
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
         max-width: 100% !important;
     }
 
+
     /* Hide Streamlit header */
+
     header[data-testid="stHeader"] {
         display: none;
     }
 
+
     /* Main title */
+
     .main-title {
         font-size: 30px;
         font-weight: 700;
-        margin-bottom: 2px;
         line-height: 1.1;
-    }
-
-    /* Subtitle */
-    .sub-title {
-        color: #777;
-        font-size: 15px;
-        margin-top: 0;
         margin-bottom: 12px;
     }
 
-    /* Section titles */
+
+    /* Section title */
+
     .section-title {
         font-size: 22px;
         font-weight: 700;
-        margin-top: 12px;
+        margin-top: 15px;
         margin-bottom: 8px;
     }
 
+
     /* Metric cards */
+
     div[data-testid="stMetric"] {
+
         border: 1px solid #dddddd;
+
         padding: 10px;
+
         border-radius: 10px;
-        min-height: 95px;
+
+        min-height: 90px;
     }
 
-    /* Dataframe */
+
+    /* Dataframe full width */
+
     div[data-testid="stDataFrame"] {
+
         width: 100% !important;
     }
 
-    /* Reduce blank space */
+
+    /* Reduce gaps */
+
     div[data-testid="stVerticalBlock"] {
+
         gap: 0.5rem;
+    }
+
+
+    /* Button */
+
+    .stButton button {
+
+        height: 42px;
+
+        font-weight: 600;
+
+        border-radius: 8px;
     }
 
     </style>
     """,
-    unsafe_allow_html=True,
+    unsafe_allow_html=True
 )
 
 
 # ============================================================
 # UPSTOX INSTRUMENT URL
 # ============================================================
+
 UPSTOX_INSTRUMENT_URL = (
     "https://assets.upstox.com/"
     "market-quote/instruments/exchange/NSE.json.gz"
@@ -103,6 +145,7 @@ UPSTOX_INSTRUMENT_URL = (
 # ============================================================
 # EXPIRY NORMALIZATION
 # ============================================================
+
 def normalize_expiry(series):
 
     numeric = pd.to_numeric(
@@ -125,8 +168,9 @@ def normalize_expiry(series):
 
 
 # ============================================================
-# LOAD UPSTOX INSTRUMENTS
+# LOAD INSTRUMENTS
 # ============================================================
+
 @st.cache_data(
     ttl=3600,
     show_spinner=False
@@ -138,18 +182,32 @@ def load_instruments():
         compression="gzip"
     )
 
-    instruments["expiry_date"] = normalize_expiry(
-        instruments["expiry"]
+
+    instruments["expiry_date"] = (
+        normalize_expiry(
+            instruments["expiry"]
+        )
     )
 
-    # NSE EQUITY
+
+    # --------------------------------------------------------
+    # EQUITY
+    # --------------------------------------------------------
+
     equities = instruments[
         (instruments["segment"] == "NSE_EQ")
         &
-        (instruments["instrument_type"] == "EQ")
+        (
+            instruments["instrument_type"]
+            == "EQ"
+        )
     ].copy()
 
-    # NSE OPTIONS
+
+    # --------------------------------------------------------
+    # OPTIONS
+    # --------------------------------------------------------
+
     options = instruments[
         (instruments["segment"] == "NSE_FO")
         &
@@ -164,11 +222,14 @@ def load_instruments():
         )
     ].copy()
 
+
     today = date.today()
+
 
     future_expiries = options[
         options["expiry_date"] >= today
     ]["expiry_date"]
+
 
     if future_expiries.empty:
 
@@ -178,12 +239,17 @@ def load_instruments():
             None
         )
 
-    nearest_expiry = future_expiries.min()
+
+    nearest_expiry = (
+        future_expiries.min()
+    )
+
 
     options = options[
         options["expiry_date"]
         == nearest_expiry
     ].copy()
+
 
     return (
         equities,
@@ -193,8 +259,9 @@ def load_instruments():
 
 
 # ============================================================
-# FIND NEAREST STRIKE
+# NEAREST STRIKE
 # ============================================================
+
 def nearest_strike(
     options,
     symbol,
@@ -205,23 +272,35 @@ def nearest_strike(
     chain = options[
         (options["underlying_symbol"] == symbol)
         &
-        (options["instrument_type"] == option_type)
+        (
+            options["instrument_type"]
+            == option_type
+        )
     ].copy()
 
-    if chain.empty or pd.isna(price):
+
+    if chain.empty:
 
         return None
+
+
+    if pd.isna(price):
+
+        return None
+
 
     chain["diff"] = (
         chain["strike_price"]
         - price
     ).abs()
 
+
     nearest = (
         chain
         .sort_values("diff")
         .iloc[0]
     )
+
 
     return int(
         nearest["strike_price"]
@@ -231,6 +310,7 @@ def nearest_strike(
 # ============================================================
 # OPTION INSTRUMENT KEY
 # ============================================================
+
 def option_instrument_key(
     options,
     symbol,
@@ -242,27 +322,40 @@ def option_instrument_key(
 
         return None
 
+
     match = options[
         (options["underlying_symbol"] == symbol)
         &
-        (options["instrument_type"] == option_type)
+        (
+            options["instrument_type"]
+            == option_type
+        )
         &
-        (options["strike_price"] == strike)
+        (
+            options["strike_price"]
+            == strike
+        )
     ]
+
 
     if match.empty:
 
         return None
 
-    return match.iloc[0]["instrument_key"]
+
+    return match.iloc[0][
+        "instrument_key"
+    ]
 
 
 # ============================================================
 # NSE SESSION
 # ============================================================
+
 def nse_session():
 
     session = requests.Session()
+
 
     headers = {
 
@@ -281,11 +374,19 @@ def nse_session():
             "pre-open-market-cm-and-emerge-market"
     }
 
-    session.get(
-        "https://www.nseindia.com",
-        headers=headers,
-        timeout=10
-    )
+
+    try:
+
+        session.get(
+            "https://www.nseindia.com",
+            headers=headers,
+            timeout=10
+        )
+
+    except Exception:
+
+        pass
+
 
     return (
         session,
@@ -294,16 +395,21 @@ def nse_session():
 
 
 # ============================================================
-# FETCH NSE PRE-MARKET DATA
+# NSE PRE-MARKET DATA
 # ============================================================
+
 def fetch_nse_preopen_fo():
 
-    session, headers = nse_session()
+    session, headers = (
+        nse_session()
+    )
+
 
     url = (
         "https://www.nseindia.com/"
         "api/market-data-pre-open?key=FO"
     )
+
 
     try:
 
@@ -321,14 +427,16 @@ def fetch_nse_preopen_fo():
 
         return pd.DataFrame()
 
+
     if response.status_code != 200:
 
         st.error(
-            f"NSE Error: HTTP "
+            "NSE Error: HTTP "
             f"{response.status_code}"
         )
 
         return pd.DataFrame()
+
 
     try:
 
@@ -342,14 +450,20 @@ def fetch_nse_preopen_fo():
 
         return pd.DataFrame()
 
+
     rows = []
 
-    for item in raw.get("data", []):
+
+    for item in raw.get(
+        "data",
+        []
+    ):
 
         metadata = item.get(
             "metadata",
             {}
         )
+
 
         rows.append({
 
@@ -357,30 +471,45 @@ def fetch_nse_preopen_fo():
                 metadata.get("symbol"),
 
             "Prev Close":
-                metadata.get("previousClose"),
+                metadata.get(
+                    "previousClose"
+                ),
 
             "IEP":
-                metadata.get("iep"),
+                metadata.get(
+                    "iep"
+                ),
 
             "Change":
-                metadata.get("change"),
+                metadata.get(
+                    "change"
+                ),
 
             "% Change":
-                metadata.get("pChange"),
+                metadata.get(
+                    "pChange"
+                ),
 
             "Final":
-                metadata.get("finalPrice"),
+                metadata.get(
+                    "finalPrice"
+                ),
 
             "Final Quantity":
-                metadata.get("finalQuantity"),
+                metadata.get(
+                    "finalQuantity"
+                )
 
         })
 
+
     df = pd.DataFrame(rows)
+
 
     if df.empty:
 
         return df
+
 
     numeric_cols = [
 
@@ -389,9 +518,10 @@ def fetch_nse_preopen_fo():
         "Change",
         "% Change",
         "Final",
-        "Final Quantity",
+        "Final Quantity"
 
     ]
+
 
     for col in numeric_cols:
 
@@ -399,6 +529,7 @@ def fetch_nse_preopen_fo():
             df[col],
             errors="coerce"
         )
+
 
     df = df.dropna(
         subset=[
@@ -408,12 +539,14 @@ def fetch_nse_preopen_fo():
         ]
     )
 
+
     return df
 
 
 # ============================================================
 # UPSTOX HISTORICAL DATA
 # ============================================================
+
 @st.cache_data(
     ttl=1800,
     show_spinner=False
@@ -427,20 +560,24 @@ def fetch_upstox_history(
 
         return pd.DataFrame()
 
+
     to_date = (
         date.today()
         - timedelta(days=1)
     )
+
 
     from_date = (
         to_date
         - timedelta(days=days_back)
     )
 
+
     encoded_key = quote(
         instrument_key,
         safe=""
     )
+
 
     url = (
         "https://api.upstox.com/v3/"
@@ -448,6 +585,7 @@ def fetch_upstox_history(
         f"{encoded_key}/days/1/"
         f"{to_date}/{from_date}"
     )
+
 
     try:
 
@@ -464,9 +602,11 @@ def fetch_upstox_history(
 
         return pd.DataFrame()
 
+
     if response.status_code != 200:
 
         return pd.DataFrame()
+
 
     try:
 
@@ -481,9 +621,11 @@ def fetch_upstox_history(
 
         return pd.DataFrame()
 
+
     if not candles:
 
         return pd.DataFrame()
+
 
     df = pd.DataFrame(
         candles,
@@ -494,24 +636,28 @@ def fetch_upstox_history(
             "low",
             "close",
             "volume",
-            "oi",
+            "oi"
         ]
     )
+
 
     df["datetime"] = pd.to_datetime(
         df["datetime"]
     )
 
+
     df = df.sort_values(
         "datetime"
     )
+
 
     return df
 
 
 # ============================================================
-# PREVIOUS DAY / WEEK / MONTH LEVELS
+# PREVIOUS LEVELS
 # ============================================================
+
 def get_previous_levels(
     equity_key
 ):
@@ -520,15 +666,18 @@ def get_previous_levels(
         equity_key
     )
 
+
     if hist.empty:
 
         return None
+
 
     prev_day = hist.iloc[-1]
 
     prev_week = hist.tail(5)
 
     prev_month = hist.tail(20)
+
 
     return {
 
@@ -548,7 +697,7 @@ def get_previous_levels(
             prev_week["low"].min(),
 
         "Pre Month Low":
-            prev_month["low"].min(),
+            prev_month["low"].min()
 
     }
 
@@ -556,6 +705,7 @@ def get_previous_levels(
 # ============================================================
 # PREVIOUS OPTION CLOSE
 # ============================================================
+
 def get_prev_close(
     instrument_key
 ):
@@ -564,13 +714,16 @@ def get_prev_close(
 
         return None
 
+
     hist = fetch_upstox_history(
         instrument_key
     )
 
+
     if hist.empty:
 
         return None
+
 
     return hist.iloc[-1]["close"]
 
@@ -578,11 +731,15 @@ def get_prev_close(
 # ============================================================
 # TOP 5 GAINERS / LOSERS
 # ============================================================
+
 def get_top5_premarket_with_strikes(
     options
 ):
 
-    preopen = fetch_nse_preopen_fo()
+    preopen = (
+        fetch_nse_preopen_fo()
+    )
+
 
     if preopen.empty:
 
@@ -591,13 +748,16 @@ def get_top5_premarket_with_strikes(
             pd.DataFrame()
         )
 
+
     rows = []
+
 
     for _, row in preopen.iterrows():
 
         symbol = row["Symbol"]
 
         pre_open_price = row["IEP"]
+
 
         ce_strike = nearest_strike(
             options,
@@ -606,12 +766,14 @@ def get_top5_premarket_with_strikes(
             pre_open_price
         )
 
+
         pe_strike = nearest_strike(
             options,
             symbol,
             "PE",
             pre_open_price
         )
+
 
         rows.append({
 
@@ -631,11 +793,13 @@ def get_top5_premarket_with_strikes(
                 ce_strike,
 
             "PE Strike":
-                pe_strike,
+                pe_strike
 
         })
 
+
     final = pd.DataFrame(rows)
+
 
     if final.empty:
 
@@ -644,16 +808,20 @@ def get_top5_premarket_with_strikes(
             pd.DataFrame()
         )
 
+
     for col in [
+
         "Pre Open",
         "Prev Close",
         "% Change"
+
     ]:
 
         final[col] = pd.to_numeric(
             final[col],
             errors="coerce"
         ).round(2)
+
 
     gainers = (
         final
@@ -665,6 +833,7 @@ def get_top5_premarket_with_strikes(
         .reset_index(drop=True)
     )
 
+
     losers = (
         final
         .sort_values(
@@ -675,6 +844,7 @@ def get_top5_premarket_with_strikes(
         .reset_index(drop=True)
     )
 
+
     return (
         gainers,
         losers
@@ -684,6 +854,7 @@ def get_top5_premarket_with_strikes(
 # ============================================================
 # ADD LEVELS + BEP
 # ============================================================
+
 def add_levels_and_bep(
     df,
     equities,
@@ -693,60 +864,81 @@ def add_levels_and_bep(
 
     rows = []
 
+
     for _, row in df.iterrows():
 
         symbol = row["Symbol"]
 
         pre_open = row["Pre Open"]
 
+
         match = equities[
             equities["trading_symbol"]
             == symbol
         ]
 
+
         if match.empty:
 
             continue
+
 
         equity_key = (
             match
             .iloc[0]["instrument_key"]
         )
 
+
         levels = get_previous_levels(
             equity_key
         )
+
 
         if levels is None:
 
             continue
 
-        ce_key = option_instrument_key(
-            options,
-            symbol,
-            "CE",
-            row["CE Strike"]
+
+        ce_key = (
+            option_instrument_key(
+                options,
+                symbol,
+                "CE",
+                row["CE Strike"]
+            )
         )
 
-        pe_key = option_instrument_key(
-            options,
-            symbol,
-            "PE",
-            row["PE Strike"]
+
+        pe_key = (
+            option_instrument_key(
+                options,
+                symbol,
+                "PE",
+                row["PE Strike"]
+            )
         )
 
-        pre_close_ce = get_prev_close(
-            ce_key
+
+        pre_close_ce = (
+            get_prev_close(
+                ce_key
+            )
         )
 
-        pre_close_pe = get_prev_close(
-            pe_key
+
+        pre_close_pe = (
+            get_prev_close(
+                pe_key
+            )
         )
 
-        # ====================================================
+
+        # ----------------------------------------------------
         # BEP
-        # ====================================================
+        # ----------------------------------------------------
+
         bep = None
+
 
         if (
             pre_close_ce is not None
@@ -760,26 +952,40 @@ def add_levels_and_bep(
                 pre_close_pe
             ) / 2
 
+
         new_row = row.to_dict()
 
-        # ====================================================
-        # GAINER LEVELS
-        # ====================================================
+
+        # ----------------------------------------------------
+        # GAINERS
+        # ----------------------------------------------------
+
         if side == "gainer":
 
-            new_row["Pre Day High"] = (
-                levels["Pre Day High"]
-            )
+            new_row[
+                "Pre Day High"
+            ] = levels[
+                "Pre Day High"
+            ]
 
-            new_row["Pre Week High"] = (
-                levels["Pre Week High"]
-            )
 
-            new_row["Pre Month High"] = (
-                levels["Pre Month High"]
-            )
+            new_row[
+                "Pre Week High"
+            ] = levels[
+                "Pre Week High"
+            ]
 
-            new_row["Day High Status"] = (
+
+            new_row[
+                "Pre Month High"
+            ] = levels[
+                "Pre Month High"
+            ]
+
+
+            new_row[
+                "Day High Status"
+            ] = (
 
                 "abv"
 
@@ -789,7 +995,10 @@ def add_levels_and_bep(
                 else "--"
             )
 
-            new_row["Week High Status"] = (
+
+            new_row[
+                "Week High Status"
+            ] = (
 
                 "abv"
 
@@ -799,7 +1008,10 @@ def add_levels_and_bep(
                 else "--"
             )
 
-            new_row["Month High Status"] = (
+
+            new_row[
+                "Month High Status"
+            ] = (
 
                 "abv"
 
@@ -809,24 +1021,37 @@ def add_levels_and_bep(
                 else "--"
             )
 
-        # ====================================================
-        # LOSER LEVELS
-        # ====================================================
+
+        # ----------------------------------------------------
+        # LOSERS
+        # ----------------------------------------------------
+
         if side == "loser":
 
-            new_row["Pre Day Low"] = (
-                levels["Pre Day Low"]
-            )
+            new_row[
+                "Pre Day Low"
+            ] = levels[
+                "Pre Day Low"
+            ]
 
-            new_row["Pre Week Low"] = (
-                levels["Pre Week Low"]
-            )
 
-            new_row["Pre Month Low"] = (
-                levels["Pre Month Low"]
-            )
+            new_row[
+                "Pre Week Low"
+            ] = levels[
+                "Pre Week Low"
+            ]
 
-            new_row["Day Low Status"] = (
+
+            new_row[
+                "Pre Month Low"
+            ] = levels[
+                "Pre Month Low"
+            ]
+
+
+            new_row[
+                "Day Low Status"
+            ] = (
 
                 "blw"
 
@@ -836,7 +1061,10 @@ def add_levels_and_bep(
                 else "--"
             )
 
-            new_row["Week Low Status"] = (
+
+            new_row[
+                "Week Low Status"
+            ] = (
 
                 "blw"
 
@@ -846,7 +1074,10 @@ def add_levels_and_bep(
                 else "--"
             )
 
-            new_row["Month Low Status"] = (
+
+            new_row[
+                "Month Low Status"
+            ] = (
 
                 "blw"
 
@@ -856,26 +1087,40 @@ def add_levels_and_bep(
                 else "--"
             )
 
-        # ====================================================
-        # OPTION CLOSE + BEP
-        # ====================================================
-        new_row["Pre Close CE"] = (
-            pre_close_ce
+
+        # ----------------------------------------------------
+        # OPTION CLOSES
+        # ----------------------------------------------------
+
+        new_row[
+            "Pre Close CE"
+        ] = pre_close_ce
+
+
+        new_row[
+            "Pre Close PE"
+        ] = pre_close_pe
+
+
+        new_row[
+            "BEP"
+        ] = bep
+
+
+        rows.append(
+            new_row
         )
 
-        new_row["Pre Close PE"] = (
-            pre_close_pe
-        )
 
-        new_row["BEP"] = bep
+    result = pd.DataFrame(
+        rows
+    )
 
-        rows.append(new_row)
-
-    result = pd.DataFrame(rows)
 
     if result.empty:
 
         return result
+
 
     number_cols = [
 
@@ -894,9 +1139,10 @@ def add_levels_and_bep(
         "Pre Close CE",
         "Pre Close PE",
 
-        "BEP",
+        "BEP"
 
     ]
+
 
     for col in number_cols:
 
@@ -907,12 +1153,14 @@ def add_levels_and_bep(
                 errors="coerce"
             ).round(2)
 
+
     return result
 
 
 # ============================================================
 # FORMAT TABLE
 # ============================================================
+
 def format_table(
     df,
     side
@@ -922,32 +1170,43 @@ def format_table(
 
         return df
 
+
     display_df = df.copy()
+
 
     if side == "gainer":
 
         columns = [
 
             "Symbol",
+
             "Pre Open",
+
             "Prev Close",
+
             "% Change",
 
             "CE Strike",
+
             "PE Strike",
 
             "Pre Day High",
+
             "Pre Week High",
+
             "Pre Month High",
 
             "Day High Status",
+
             "Week High Status",
+
             "Month High Status",
 
             "Pre Close CE",
+
             "Pre Close PE",
 
-            "BEP",
+            "BEP"
 
         ]
 
@@ -956,27 +1215,37 @@ def format_table(
         columns = [
 
             "Symbol",
+
             "Pre Open",
+
             "Prev Close",
+
             "% Change",
 
             "CE Strike",
+
             "PE Strike",
 
             "Pre Day Low",
+
             "Pre Week Low",
+
             "Pre Month Low",
 
             "Day Low Status",
+
             "Week Low Status",
+
             "Month Low Status",
 
             "Pre Close CE",
+
             "Pre Close PE",
 
-            "BEP",
+            "BEP"
 
         ]
+
 
     columns = [
 
@@ -988,12 +1257,16 @@ def format_table(
 
     ]
 
-    return display_df[columns]
+
+    return display_df[
+        columns
+    ]
 
 
 # ============================================================
 # HEADER
 # ============================================================
+
 st.markdown(
     """
     <div class="main-title">
@@ -1005,17 +1278,63 @@ st.markdown(
 
 
 # ============================================================
+# MANUAL REFRESH BUTTON
+# ============================================================
+
+refresh_col1, refresh_col2 = (
+    st.columns([8, 2])
+)
+
+
+with refresh_col2:
+
+    if st.button(
+        "🔄 Manual Refresh",
+        use_container_width=True
+    ):
+
+        # Store actual refresh time
+
+        st.session_state.last_updated = (
+            datetime.now()
+        )
+
+
+        # Clear cached NSE / Upstox data
+
+        st.cache_data.clear()
+
+
+        # Reload page
+
+        st.rerun()
+
+
+# ============================================================
+# LAST UPDATED TIME
+# ============================================================
+
+last_updated = (
+    st.session_state.last_updated
+)
+
+
+# ============================================================
 # LOAD DATA
 # ============================================================
+
 with st.spinner(
     "Loading NSE and Upstox data..."
 ):
 
     try:
 
-        equities, options, opt_expiry = (
-            load_instruments()
-        )
+        (
+            equities,
+            options,
+            opt_expiry
+        ) = load_instruments()
+
 
         if opt_expiry is None:
 
@@ -1025,11 +1344,16 @@ with st.spinner(
 
             st.stop()
 
-        top5_gainers, top5_losers = (
+
+        (
+            top5_gainers,
+            top5_losers
+        ) = (
             get_top5_premarket_with_strikes(
                 options
             )
         )
+
 
         gainers_final = (
             add_levels_and_bep(
@@ -1040,6 +1364,7 @@ with st.spinner(
             )
         )
 
+
         losers_final = (
             add_levels_and_bep(
                 top5_losers,
@@ -1048,6 +1373,7 @@ with st.spinner(
                 side="loser"
             )
         )
+
 
     except Exception as e:
 
@@ -1061,7 +1387,10 @@ with st.spinner(
 # ============================================================
 # SUMMARY CARDS
 # ============================================================
-c1, c2, c3, c4 = st.columns(4)
+
+c1, c2, c3, c4, c5 = (
+    st.columns(5)
+)
 
 
 with c1:
@@ -1090,18 +1419,31 @@ with c3:
 
 with c4:
 
-    # IMPORTANT:
-    # Do NOT use datetime.now()
-    # This is fixed to NSE pre-market close.
+    # FIXED MARKET TIME
+    # This is NOT server/current time.
+
     st.metric(
         "PRE-MARKET CLOSE",
         PRE_MARKET_CLOSE
     )
 
 
+with c5:
+
+    # ACTUAL MANUAL REFRESH TIME
+
+    st.metric(
+        "LAST UPDATED",
+        last_updated.strftime(
+            "%I:%M:%S %p"
+        )
+    )
+
+
 # ============================================================
 # TOP 5 GAINERS
 # ============================================================
+
 st.markdown(
     """
     <div class="section-title">
@@ -1120,22 +1462,26 @@ if gainers_final.empty:
 
 else:
 
-    gainers_display = format_table(
-        gainers_final,
-        "gainer"
+    gainers_display = (
+        format_table(
+            gainers_final,
+            "gainer"
+        )
     )
+
 
     st.dataframe(
         gainers_display,
         use_container_width=True,
         hide_index=True,
-        height=300,
+        height=300
     )
 
 
 # ============================================================
 # TOP 5 LOSERS
 # ============================================================
+
 st.markdown(
     """
     <div class="section-title">
@@ -1154,27 +1500,97 @@ if losers_final.empty:
 
 else:
 
-    losers_display = format_table(
-        losers_final,
-        "loser"
+    losers_display = (
+        format_table(
+            losers_final,
+            "loser"
+        )
     )
+
 
     st.dataframe(
         losers_display,
         use_container_width=True,
         hide_index=True,
-        height=300,
+        height=300
     )
+
+
+# ============================================================
+# DOWNLOAD
+# ============================================================
+
+st.markdown(
+    """
+    <div class="section-title">
+        📥 EXPORT
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+
+d1, d2 = st.columns(2)
+
+
+with d1:
+
+    if not gainers_final.empty:
+
+        st.download_button(
+
+            "Download Gainers CSV",
+
+            gainers_final.to_csv(
+                index=False
+            ),
+
+            file_name=(
+                "nse_top5_gainers.csv"
+            ),
+
+            mime="text/csv",
+
+            use_container_width=True
+        )
+
+
+with d2:
+
+    if not losers_final.empty:
+
+        st.download_button(
+
+            "Download Losers CSV",
+
+            losers_final.to_csv(
+                index=False
+            ),
+
+            file_name=(
+                "nse_top5_losers.csv"
+            ),
+
+            mime="text/csv",
+
+            use_container_width=True
+        )
 
 
 # ============================================================
 # FOOTER
 # ============================================================
+
 st.markdown("---")
 
 st.caption(
     "NSE Pre-Market Session: "
-    f"{PRE_MARKET_OPEN} – {PRE_MARKET_CLOSE}  |  "
-    f"Data shown as of Pre-Market Close: "
+    f"{PRE_MARKET_OPEN} – "
     f"{PRE_MARKET_CLOSE}"
+    "  |  "
+    "Pre-Market Close: "
+    f"{PRE_MARKET_CLOSE}"
+    "  |  "
+    "Last manual refresh: "
+    f"{last_updated.strftime('%I:%M:%S %p')}"
 )
