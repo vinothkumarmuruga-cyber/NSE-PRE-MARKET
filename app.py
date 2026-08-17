@@ -234,15 +234,17 @@ def option_instrument_key(options, symbol, option_type, strike):
 
 
 # ============================================================
-# NSE SESSION  (FIXED)
+# NSE SESSION
 # ============================================================
 #
 # NSE blocks requests that don't look like a real browser
-# session. The fix is a 2-step handshake:
-#   1. GET the NSE homepage to collect cookies
-#   2. GET a page that plausibly links to the API (sets Referer)
-#   3. Only then call the API endpoint, reusing the same
-#      session/cookies, with a matching Accept header.
+# session, AND separately blackholes many cloud/datacenter IP
+# ranges (including Streamlit Cloud) regardless of headers.
+# Strategy:
+#   1. Try direct, with a full realistic browser handshake.
+#   2. If that 401/403s, fall back to a public proxy relay
+#      (allorigins) so the request originates from a
+#      different IP entirely.
 # ============================================================
 
 NSE_UA = (
@@ -261,21 +263,25 @@ def nse_session():
         "Accept-Language": "en-US,en;q=0.9",
         "Accept-Encoding": "gzip, deflate, br",
         "Connection": "keep-alive",
+        "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "Upgrade-Insecure-Requests": "1",
     }
 
     try:
-        # Step 1: homepage -> sets initial cookies
         session.get(
             "https://www.nseindia.com",
-            headers=base_headers,
+            headers={**base_headers, "Sec-Fetch-Site": "none",
+                     "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"},
             timeout=10
         )
 
-        # Step 2: a real page that references pre-open data,
-        # to set a believable Referer + extra cookies
         session.get(
             "https://www.nseindia.com/market-data/pre-open-market-cm-and-emerge-market",
-            headers=base_headers,
+            headers={**base_headers, "Sec-Fetch-Site": "same-origin",
+                     "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document",
+                     "Referer": "https://www.nseindia.com/"},
             timeout=10
         )
 
@@ -287,52 +293,65 @@ def nse_session():
         "Accept": "application/json, text/plain, */*",
         "Referer": "https://www.nseindia.com/market-data/pre-open-market-cm-and-emerge-market",
         "X-Requested-With": "XMLHttpRequest",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Dest": "empty",
     })
 
     return session, api_headers
+
+
+def fetch_nse_direct(url):
+    session, headers = nse_session()
+    try:
+        response = session.get(url, headers=headers, timeout=15)
+        if response.status_code == 200:
+            return response.json()
+    except Exception:
+        pass
+    return None
+
+
+def fetch_nse_via_proxy(url):
+    # allorigins fetches server-side on its own IP, sidestepping
+    # NSE's block on Streamlit Cloud's IP range.
+    proxy_url = "https://api.allorigins.win/raw?url=" + quote(url, safe="")
+    try:
+        response = requests.get(proxy_url, timeout=20)
+        if response.status_code == 200:
+            return response.json()
+    except Exception:
+        pass
+    return None
 
 
 # ============================================================
 # NSE PRE-OPEN DATA
 # ============================================================
 
+@st.cache_data(ttl=60, show_spinner=False)
 def fetch_nse_preopen_fo():
-
-    session, headers = nse_session()
 
     url = "https://www.nseindia.com/api/market-data-pre-open?key=FO"
 
-    try:
-        response = session.get(url, headers=headers, timeout=15)
-    except Exception as e:
-        st.error(f"NSE connection error: {e}")
-        return pd.DataFrame()
+    raw = fetch_nse_direct(url)
 
-    if response.status_code == 401 or response.status_code == 403:
-        # One retry with a fresh session — NSE sometimes rejects
-        # the first attempt even with correct headers/cookies.
-        try:
-            session, headers = nse_session()
-            response = session.get(url, headers=headers, timeout=15)
-        except Exception as e:
-            st.error(f"NSE connection error on retry: {e}")
-            return pd.DataFrame()
+    source = "direct"
 
-    if response.status_code != 200:
+    if raw is None:
+        raw = fetch_nse_via_proxy(url)
+        source = "proxy"
+
+    if raw is None:
         st.error(
-            f"NSE Error: HTTP {response.status_code}. "
-            "NSE occasionally rate-limits/blocks cloud IPs "
-            "(Streamlit Cloud) — try Manual Refresh, or if it "
-            "persists this endpoint may be temporarily blocking "
-            "your host's IP range."
+            "NSE Error: both direct and proxy fetch failed. "
+            "NSE is blocking/rate-limiting this connection — "
+            "try Manual Refresh in a minute."
         )
         return pd.DataFrame()
 
-    try:
-        raw = response.json()
-    except Exception:
-        st.error("NSE returned invalid JSON.")
-        return pd.DataFrame()
+    if source == "proxy":
+        st.caption("⚠️ Fetched via proxy relay (direct NSE connection was blocked).")
 
     rows = []
 
