@@ -3,18 +3,24 @@ import pandas as pd
 from datetime import date, timedelta
 from urllib.parse import quote
 
-UPSTOX_INSTRUMENT_URL = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
+# ---------------------------------------------------------------------
+# display() fallback (only exists natively inside Jupyter/IPython)
+# ---------------------------------------------------------------------
+try:
+    from IPython.display import display
+except ImportError:
+    def display(df):
+        print(df.to_string(index=False))
 
+UPSTOX_INSTRUMENT_URL = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
 
 # ---------------------------------------------------------------------
 # Instruments (equities + options)
 # ---------------------------------------------------------------------
 def normalize_expiry(series):
     numeric = pd.to_numeric(series, errors="coerce")
-
     if numeric.notna().any():
         return pd.to_datetime(numeric, unit="ms", errors="coerce").dt.date
-
     return pd.to_datetime(series, errors="coerce").dt.date
 
 
@@ -45,29 +51,23 @@ def nearest_strike(options, symbol, option_type, price):
         (options["underlying_symbol"] == symbol) &
         (options["instrument_type"] == option_type)
     ].copy()
-
     if chain.empty or pd.isna(price):
         return None
-
     chain["diff"] = (chain["strike_price"] - price).abs()
     nearest = chain.sort_values("diff").iloc[0]
-
     return int(nearest["strike_price"])
 
 
 def option_instrument_key(options, symbol, option_type, strike):
     if strike is None:
         return None
-
     match = options[
         (options["underlying_symbol"] == symbol) &
         (options["instrument_type"] == option_type) &
         (options["strike_price"] == strike)
     ]
-
     if match.empty:
         return None
-
     return match.iloc[0]["instrument_key"]
 
 
@@ -76,24 +76,20 @@ def option_instrument_key(options, symbol, option_type, strike):
 # ---------------------------------------------------------------------
 def nse_session():
     s = requests.Session()
-
     headers = {
         "User-Agent": "Mozilla/5.0",
         "Accept": "application/json,text/plain,*/*",
         "Accept-Language": "en-US,en;q=0.9",
         "Referer": "https://www.nseindia.com/market-data/pre-open-market-cm-and-emerge-market"
     }
-
     s.get("https://www.nseindia.com", headers=headers, timeout=10)
     return s, headers
 
 
 def fetch_nse_preopen_fo():
     s, headers = nse_session()
-
     url = "https://www.nseindia.com/api/market-data-pre-open?key=FO"
     response = s.get(url, headers=headers, timeout=10)
-
     if response.status_code != 200:
         print("NSE Error:", response.status_code)
         print(response.text[:500])
@@ -101,10 +97,8 @@ def fetch_nse_preopen_fo():
 
     raw = response.json()
     rows = []
-
     for item in raw.get("data", []):
         m = item.get("metadata", {})
-
         rows.append({
             "Symbol": m.get("symbol"),
             "Prev Close": m.get("previousClose"),
@@ -116,13 +110,10 @@ def fetch_nse_preopen_fo():
         })
 
     df = pd.DataFrame(rows)
-
     numeric_cols = ["Prev Close", "IEP", "Change", "% Change", "Final", "Final Quantity"]
     for col in numeric_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce")
-
     df = df.dropna(subset=["Symbol", "IEP", "% Change"])
-
     return df
 
 
@@ -134,15 +125,12 @@ def fetch_upstox_history(instrument_key, days_back=45):
     from_date = to_date - timedelta(days=days_back)
     encoded_key = quote(instrument_key, safe="")
     url = f"https://api.upstox.com/v3/historical-candle/{encoded_key}/days/1/{to_date}/{from_date}"
-
     response = requests.get(url, headers={"Accept": "application/json"})
-
     if response.status_code != 200:
         print("History Error:", instrument_key, response.status_code)
         return pd.DataFrame()
 
     candles = response.json().get("data", {}).get("candles", [])
-
     if not candles:
         return pd.DataFrame()
 
@@ -152,20 +140,16 @@ def fetch_upstox_history(instrument_key, days_back=45):
     )
     df["datetime"] = pd.to_datetime(df["datetime"])
     df = df.sort_values("datetime")
-
     return df
 
 
 def get_previous_levels(equity_key):
     hist = fetch_upstox_history(equity_key)
-
     if hist.empty:
         return None
-
     prev_day = hist.iloc[-1]
     prev_week = hist.tail(5)
     prev_month = hist.tail(20)
-
     return {
         "Pre Day High": prev_day["high"],
         "Pre Week High": prev_week["high"].max(),
@@ -179,12 +163,9 @@ def get_previous_levels(equity_key):
 def get_prev_close(instrument_key):
     if instrument_key is None:
         return None
-
     hist = fetch_upstox_history(instrument_key)
-
     if hist.empty:
         return None
-
     return hist.iloc[-1]["close"]
 
 
@@ -193,20 +174,16 @@ def get_prev_close(instrument_key):
 # ---------------------------------------------------------------------
 def get_top5_premarket_with_strikes(options):
     preopen = fetch_nse_preopen_fo()
-
     if preopen.empty:
         print("No NSE pre-open data received.")
         return pd.DataFrame(), pd.DataFrame()
 
     rows = []
-
     for _, row in preopen.iterrows():
         symbol = row["Symbol"]
         pre_open_price = row["IEP"]
-
         ce_strike = nearest_strike(options, symbol, "CE", pre_open_price)
         pe_strike = nearest_strike(options, symbol, "PE", pre_open_price)
-
         rows.append({
             "Symbol": symbol,
             "Pre Open": pre_open_price,
@@ -217,7 +194,6 @@ def get_top5_premarket_with_strikes(options):
         })
 
     final = pd.DataFrame(rows)
-
     for col in ["Pre Open", "Prev Close", "% Change"]:
         final[col] = pd.to_numeric(final[col], errors="coerce").round(2)
 
@@ -226,13 +202,11 @@ def get_top5_premarket_with_strikes(options):
         .head(5)
         .reset_index(drop=True)
     )
-
     losers = (
         final.sort_values("% Change", ascending=True)
         .head(5)
         .reset_index(drop=True)
     )
-
     return gainers, losers
 
 
@@ -241,7 +215,6 @@ def get_top5_premarket_with_strikes(options):
 # ---------------------------------------------------------------------
 def add_levels_and_bep(df, equities, options, side):
     rows = []
-
     for _, row in df.iterrows():
         symbol = row["Symbol"]
         pre_open = row["Pre Open"]
@@ -249,15 +222,14 @@ def add_levels_and_bep(df, equities, options, side):
         match = equities[equities["trading_symbol"] == symbol]
         if match.empty:
             continue
-
         equity_key = match.iloc[0]["instrument_key"]
+
         levels = get_previous_levels(equity_key)
         if levels is None:
             continue
 
         ce_key = option_instrument_key(options, symbol, "CE", row["CE Strike"])
         pe_key = option_instrument_key(options, symbol, "PE", row["PE Strike"])
-
         pre_close_ce = get_prev_close(ce_key)
         pre_close_pe = get_prev_close(pe_key)
 
@@ -290,7 +262,6 @@ def add_levels_and_bep(df, equities, options, side):
         rows.append(new_row)
 
     result = pd.DataFrame(rows)
-
     number_cols = [
         "Pre Open", "Prev Close", "% Change",
         "Pre Day High", "Pre Week High", "Pre Month High",
@@ -307,16 +278,17 @@ def add_levels_and_bep(df, equities, options, side):
 # ---------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------
-equities, options, opt_expiry = load_instruments()
-print("Option Expiry Used:", opt_expiry)
+if __name__ == "__main__":
+    equities, options, opt_expiry = load_instruments()
+    print("Option Expiry Used:", opt_expiry)
 
-top5_gainers, top5_losers = get_top5_premarket_with_strikes(options)
+    top5_gainers, top5_losers = get_top5_premarket_with_strikes(options)
 
-gainers_final = add_levels_and_bep(top5_gainers, equities, options, side="gainer")
-losers_final = add_levels_and_bep(top5_losers, equities, options, side="loser")
+    gainers_final = add_levels_and_bep(top5_gainers, equities, options, side="gainer")
+    losers_final = add_levels_and_bep(top5_losers, equities, options, side="loser")
 
-print("TOP 5 GAINERS")
-display(gainers_final)
+    print("TOP 5 GAINERS")
+    display(gainers_final)
 
-print("TOP 5 LOSERS")
-display(losers_final)
+    print("TOP 5 LOSERS")
+    display(losers_final)
