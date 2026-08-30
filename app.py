@@ -166,61 +166,6 @@ def fetch_nse_preopen_fo(s, headers):
     return df
 
 
-def fetch_nse_option_chain(s, headers, symbol):
-    """Strike-wise CE/PE implied volatility for one underlying, straight
-    from NSE's own option chain (same site the pre-open data comes from --
-    no separate API key needed, unlike Upstox's option-chain endpoint)."""
-    url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
-
-    try:
-        response = s.get(url, headers=headers, timeout=10)
-    except requests.RequestException:
-        return pd.DataFrame()
-
-    if response.status_code != 200:
-        return pd.DataFrame()
-
-    records = response.json().get("records", {}).get("data", [])
-    if not records:
-        return pd.DataFrame()
-
-    rows = []
-    for rec in records:
-        try:
-            expiry = pd.to_datetime(rec.get("expiryDate"), format="%d-%b-%Y").date()
-        except (ValueError, TypeError):
-            expiry = None
-
-        ce = rec.get("CE") or {}
-        pe = rec.get("PE") or {}
-
-        rows.append({
-            "expiry": expiry,
-            "strike": rec.get("strikePrice"),
-            "CE IV": ce.get("impliedVolatility") or None,
-            "PE IV": pe.get("impliedVolatility") or None,
-        })
-
-    return pd.DataFrame(rows)
-
-
-def get_iv(chain_df, strike, expiry, side):
-    if chain_df.empty or strike is None or pd.isna(strike):
-        return None
-
-    col = "CE IV" if side == "CE" else "PE IV"
-
-    match = chain_df[(chain_df["strike"] == strike) & (chain_df["expiry"] == expiry)]
-    if match.empty:
-        # Fall back to any expiry for that strike, in case NSE's nearest
-        # expiry listing doesn't line up exactly with Upstox's.
-        match = chain_df[chain_df["strike"] == strike]
-        if match.empty:
-            return None
-
-    return match.iloc[0][col]
-
-
 # ---------------------------------------------------------------------
 # Historical candles (used for prev D/W/M levels + CE/PE prev close)
 # ---------------------------------------------------------------------
@@ -336,9 +281,9 @@ def get_top5_premarket_with_strikes(options, s, headers):
 
 
 # ---------------------------------------------------------------------
-# Add prev D/W/M levels + CE/PE prev close + IV + BEP
+# Add prev D/W/M levels + CE/PE prev close + BEP
 # ---------------------------------------------------------------------
-def add_levels_and_bep(df, equities, options, side, s, headers, opt_expiry, progress=None):
+def add_levels_and_bep(df, equities, options, side, progress=None):
     rows = []
     total = len(df)
 
@@ -371,10 +316,6 @@ def add_levels_and_bep(df, equities, options, side, s, headers, opt_expiry, prog
         if pre_close_ce is not None and pre_close_pe is not None:
             avg_premium = (pre_close_ce + pre_close_pe) / 2
 
-        option_chain = fetch_nse_option_chain(s, headers, symbol)
-        ce_iv = get_iv(option_chain, row["CE Strike"], opt_expiry, "CE")
-        pe_iv = get_iv(option_chain, row["PE Strike"], opt_expiry, "PE")
-
         new_row = row.to_dict()
 
         if side == "gainer":
@@ -395,8 +336,6 @@ def add_levels_and_bep(df, equities, options, side, s, headers, opt_expiry, prog
 
         new_row["Pre Close CE"] = pre_close_ce
         new_row["Pre Close PE"] = pre_close_pe
-        new_row["CE IV"] = ce_iv
-        new_row["PE IV"] = pe_iv
         new_row["BEP"] = avg_premium
 
         rows.append(new_row)
@@ -407,7 +346,7 @@ def add_levels_and_bep(df, equities, options, side, s, headers, opt_expiry, prog
         "Pre Open", "Prev Close", "% Change",
         "Pre Day High", "Pre Week High", "Pre Month High",
         "Pre Day Low", "Pre Week Low", "Pre Month Low",
-        "Pre Close CE", "Pre Close PE", "CE IV", "PE IV", "BEP",
+        "Pre Close CE", "Pre Close PE", "BEP",
     ]
     for col in number_cols:
         if col in result.columns:
@@ -426,8 +365,8 @@ def build_tables():
     equities, options, opt_expiry = load_instruments()
     top5_gainers, top5_losers = get_top5_premarket_with_strikes(options, s, headers)
 
-    gainers_final = add_levels_and_bep(top5_gainers, equities, options, "gainer", s, headers, opt_expiry)
-    losers_final = add_levels_and_bep(top5_losers, equities, options, "loser", s, headers, opt_expiry)
+    gainers_final = add_levels_and_bep(top5_gainers, equities, options, side="gainer")
+    losers_final = add_levels_and_bep(top5_losers, equities, options, side="loser")
 
     last_updated = datetime.now(IST).strftime("%d %b %Y, %I:%M:%S %p IST")
 
