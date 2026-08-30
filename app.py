@@ -14,7 +14,7 @@ src/nse-pre-market/app.py in your repo).
 """
 
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import quote
 
 import pandas as pd
@@ -23,6 +23,7 @@ import streamlit as st
 from requests.adapters import HTTPAdapter, Retry
 
 UPSTOX_INSTRUMENT_URL = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
+IST = timezone(timedelta(hours=5, minutes=30))
 
 # Shared session for every Upstox call: pools TCP connections and retries
 # transient failures (429/500/502/503/504) automatically.
@@ -126,9 +127,8 @@ def nse_session():
     return s, headers
 
 
-def fetch_nse_preopen_fo():
+def fetch_nse_preopen_fo(s, headers):
     try:
-        s, headers = nse_session()
         url = "https://www.nseindia.com/api/market-data-pre-open?key=FO"
         response = s.get(url, headers=headers, timeout=10)
     except requests.RequestException as e:
@@ -164,6 +164,61 @@ def fetch_nse_preopen_fo():
     df = df.dropna(subset=["Symbol", "IEP", "% Change"])
 
     return df
+
+
+def fetch_nse_option_chain(s, headers, symbol):
+    """Strike-wise CE/PE implied volatility for one underlying, straight
+    from NSE's own option chain (same site the pre-open data comes from --
+    no separate API key needed, unlike Upstox's option-chain endpoint)."""
+    url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
+
+    try:
+        response = s.get(url, headers=headers, timeout=10)
+    except requests.RequestException:
+        return pd.DataFrame()
+
+    if response.status_code != 200:
+        return pd.DataFrame()
+
+    records = response.json().get("records", {}).get("data", [])
+    if not records:
+        return pd.DataFrame()
+
+    rows = []
+    for rec in records:
+        try:
+            expiry = pd.to_datetime(rec.get("expiryDate"), format="%d-%b-%Y").date()
+        except (ValueError, TypeError):
+            expiry = None
+
+        ce = rec.get("CE") or {}
+        pe = rec.get("PE") or {}
+
+        rows.append({
+            "expiry": expiry,
+            "strike": rec.get("strikePrice"),
+            "CE IV": ce.get("impliedVolatility") or None,
+            "PE IV": pe.get("impliedVolatility") or None,
+        })
+
+    return pd.DataFrame(rows)
+
+
+def get_iv(chain_df, strike, expiry, side):
+    if chain_df.empty or strike is None or pd.isna(strike):
+        return None
+
+    col = "CE IV" if side == "CE" else "PE IV"
+
+    match = chain_df[(chain_df["strike"] == strike) & (chain_df["expiry"] == expiry)]
+    if match.empty:
+        # Fall back to any expiry for that strike, in case NSE's nearest
+        # expiry listing doesn't line up exactly with Upstox's.
+        match = chain_df[chain_df["strike"] == strike]
+        if match.empty:
+            return None
+
+    return match.iloc[0][col]
 
 
 # ---------------------------------------------------------------------
@@ -236,8 +291,8 @@ def get_prev_close(instrument_key):
 # ---------------------------------------------------------------------
 # Top 5 gainers / losers with CE / PE strikes
 # ---------------------------------------------------------------------
-def get_top5_premarket_with_strikes(options):
-    preopen = fetch_nse_preopen_fo()
+def get_top5_premarket_with_strikes(options, s, headers):
+    preopen = fetch_nse_preopen_fo(s, headers)
 
     if preopen.empty:
         return pd.DataFrame(), pd.DataFrame()
@@ -281,9 +336,9 @@ def get_top5_premarket_with_strikes(options):
 
 
 # ---------------------------------------------------------------------
-# Add prev D/W/M levels + CE/PE prev close + straddle breakeven levels
+# Add prev D/W/M levels + CE/PE prev close + IV + BEP
 # ---------------------------------------------------------------------
-def add_levels_and_bep(df, equities, options, side, progress=None):
+def add_levels_and_bep(df, equities, options, side, s, headers, opt_expiry, progress=None):
     rows = []
     total = len(df)
 
@@ -309,19 +364,16 @@ def add_levels_and_bep(df, equities, options, side, progress=None):
         pre_close_ce = get_prev_close(ce_key)
         pre_close_pe = get_prev_close(pe_key)
 
-        # NOTE on breakeven: (CE + PE) / 2 is an average premium, not a real
-        # breakeven price. A long straddle at a strike breaks even at two
-        # prices: strike - total_premium and strike + total_premium.
+        # NOTE on BEP: this is (CE + PE) / 2, an average premium -- not a
+        # real breakeven price (a straddle actually breaks even at two
+        # prices: strike +/- total premium). Kept as-is for continuity.
         avg_premium = None
-        bep_upper = None
-        bep_lower = None
         if pre_close_ce is not None and pre_close_pe is not None:
-            total_premium = pre_close_ce + pre_close_pe
-            avg_premium = total_premium / 2
-            strike = row["CE Strike"] if row["CE Strike"] == row["PE Strike"] else None
-            if strike is not None:
-                bep_upper = strike + total_premium
-                bep_lower = strike - total_premium
+            avg_premium = (pre_close_ce + pre_close_pe) / 2
+
+        option_chain = fetch_nse_option_chain(s, headers, symbol)
+        ce_iv = get_iv(option_chain, row["CE Strike"], opt_expiry, "CE")
+        pe_iv = get_iv(option_chain, row["PE Strike"], opt_expiry, "PE")
 
         new_row = row.to_dict()
 
@@ -343,9 +395,9 @@ def add_levels_and_bep(df, equities, options, side, progress=None):
 
         new_row["Pre Close CE"] = pre_close_ce
         new_row["Pre Close PE"] = pre_close_pe
+        new_row["CE IV"] = ce_iv
+        new_row["PE IV"] = pe_iv
         new_row["BEP"] = avg_premium
-        new_row["Straddle BEP Upper"] = bep_upper
-        new_row["Straddle BEP Lower"] = bep_lower
 
         rows.append(new_row)
 
@@ -355,8 +407,7 @@ def add_levels_and_bep(df, equities, options, side, progress=None):
         "Pre Open", "Prev Close", "% Change",
         "Pre Day High", "Pre Week High", "Pre Month High",
         "Pre Day Low", "Pre Week Low", "Pre Month Low",
-        "Pre Close CE", "Pre Close PE", "BEP",
-        "Straddle BEP Upper", "Straddle BEP Lower",
+        "Pre Close CE", "Pre Close PE", "CE IV", "PE IV", "BEP",
     ]
     for col in number_cols:
         if col in result.columns:
@@ -367,13 +418,20 @@ def add_levels_and_bep(df, equities, options, side, progress=None):
 
 @st.cache_data(ttl=120, show_spinner=False)
 def build_tables():
+    # One NSE session (and its cookies) reused for the pre-open fetch and
+    # every per-symbol option-chain/IV lookup below, instead of a fresh
+    # cookie handshake per request.
+    s, headers = nse_session()
+
     equities, options, opt_expiry = load_instruments()
-    top5_gainers, top5_losers = get_top5_premarket_with_strikes(options)
+    top5_gainers, top5_losers = get_top5_premarket_with_strikes(options, s, headers)
 
-    gainers_final = add_levels_and_bep(top5_gainers, equities, options, side="gainer")
-    losers_final = add_levels_and_bep(top5_losers, equities, options, side="loser")
+    gainers_final = add_levels_and_bep(top5_gainers, equities, options, "gainer", s, headers, opt_expiry)
+    losers_final = add_levels_and_bep(top5_losers, equities, options, "loser", s, headers, opt_expiry)
 
-    return gainers_final, losers_final, opt_expiry
+    last_updated = datetime.now(IST).strftime("%d %b %Y, %I:%M:%S %p IST")
+
+    return gainers_final, losers_final, opt_expiry, last_updated
 
 
 # ---------------------------------------------------------------------
@@ -386,12 +444,12 @@ if st.button("Refresh"):
     build_tables.clear()
 
 try:
-    gainers_final, losers_final, opt_expiry = build_tables()
+    gainers_final, losers_final, opt_expiry, last_updated = build_tables()
 except Exception as e:
     st.error(f"Failed to build pre-market tables: {e}")
     st.stop()
 
-st.caption(f"Option expiry used: {opt_expiry}")
+st.caption(f"Option expiry used: {opt_expiry}  |  Last updated: {last_updated}")
 
 st.subheader("Top 5 Gainers")
 if gainers_final.empty:
